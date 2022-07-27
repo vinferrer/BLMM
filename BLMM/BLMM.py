@@ -10,6 +10,8 @@ from BLMM.src.blmm_batch import batch
 from BLMM.src.blmm_cleanup import cleanup
 from BLMM.src.blmm_concat import concat
 from BLMM.src.blmm_results  import results
+from distributed.diagnostics import MemorySampler
+from matplotlib import pyplot as plt
 
 
 def _main(argv=sys.argv[1:]):
@@ -67,29 +69,30 @@ def _main(argv=sys.argv[1:]):
     # --------------------------------------------------------------------------------
     # Run Batch Jobs
     # --------------------------------------------------------------------------------
-    
-    # Ask for a node for setup
-    # Make sure we don't use more nodes than necesary 
-    if numNodes > nb+1 or numNodes > nvb+1:
-        cluster.scale(min([nb, nvb]) )
-    else:
-        cluster.scale(numNodes)
-    # Empty futures list
-    futures = []
-    # Submit jobs
-    for i in np.arange(1,nb+1):
+    ms = MemorySampler()
+    with ms.sample("batch"):
+        # Ask for a node for setup
+        # Make sure we don't use more nodes than necesary 
+        if numNodes > nb+1 or numNodes > nvb+1:
+            cluster.scale(min([nb, nvb]) )
+        else:
+            cluster.scale(numNodes)
+        # Empty futures list
+        futures = []
+        # Submit jobs
+        for i in np.arange(1,nb+1):
 
-        # Run the jobNum^{th} job.
-        future_b = client.submit(batch, i, inputs_yml, pure=False)
+            # Run the jobNum^{th} job.
+            future_b = client.submit(batch, i, inputs_yml, pure=False)
 
-        # Append to list 
-        futures.append(future_b)
+            # Append to list 
+            futures.append(future_b)
 
-    # wait for results 
-        completed = as_completed(futures)
+        # wait for results 
+            completed = as_completed(futures)
 
-        # Delete the future objects (NOTE: see above comment in setup section).
-        del i, futures, future_b, completed
+            # Delete the future objects (NOTE: see above comment in setup section).
+            del i, futures, future_b, completed
     
     # --------------------------------------------------------------------------------
     # Run Concatenation Job
@@ -106,35 +109,37 @@ def _main(argv=sys.argv[1:]):
     # Run Results Jobs
     # --------------------------------------------------------------------------------
     # If we aren't voxel batching run the entire analysis in one serial job.
-    if not voxelBatching:
-    
-        future_r = client.submit(results, inputs_yml, -1, pure=False)
-        future_r.result()
-
-        # Delete the future object (NOTE: see above comment in setup section).
-        del future_r
+    with ms.sample("batch"):
+        if not voxelBatching:
         
-    # If we are voxel batching, split the analysis into chunks and run in parallel.
-    else:
+            future_r = client.submit(results, inputs_yml, -1, pure=False)
+            future_r.result()
 
-        # Empty futures list
-        futures = []
+            # Delete the future object (NOTE: see above comment in setup section).
+            del future_r
+            
+        # If we are voxel batching, split the analysis into chunks and run in parallel.
+        else:
 
-        # Submit job for each voxel batch
-        for i in np.arange(1,nvb+1):
+            # Empty futures list
+            futures = []
 
-            # Run the jobNum^{th} job.
-            future_r = client.submit(results, inputs_yml, i, pure=False)
+            # Submit job for each voxel batch
+            for i in np.arange(1,nvb+1):
 
-            # Append to list 
-            futures.append(future_r)
+                # Run the jobNum^{th} job.
+                future_r = client.submit(results, inputs_yml, i, pure=False)
 
-        # Completed jobs
-        completed = as_completed(futures)
+                # Append to list 
+                futures.append(future_r)
 
-        # Delete the future objects (NOTE: see above comment in setup section).
-        del i, futures, future_r, completed
+            # Completed jobs
+            completed = as_completed(futures)
 
+            # Delete the future objects (NOTE: see above comment in setup section).
+            del i, futures, future_r, completed
+    ms.plot(align=True)
+    plt.savefig(os.path.join(OutDir, 'memory_usage.png'))
     # --------------------------------------------------------------------------------
     # Run Cleanup Job
     # --------------------------------------------------------------------------------
